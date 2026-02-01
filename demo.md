@@ -60,27 +60,7 @@ Now we'll create a Kind cluster configured to use Keycloak as an OIDC provider. 
 ```sh
 # create cluster with our generated certificate
 # and pass necessary arguments to api server
-kind create cluster --image kindest/node:v1.33.1 --config - <<EOF
-kind: Cluster
-apiVersion: kind.x-k8s.io/v1alpha4
-kubeadmConfigPatches:
-- |-
-  kind: ClusterConfiguration
-  apiServer:
-    extraArgs:
-      oidc-client-id: kube
-      oidc-issuer-url: https://keycloak.kind.cluster/realms/master
-      oidc-username-claim: email
-      oidc-groups-claim: groups
-      oidc-ca-file: /etc/ca-certificates/keycloak/root-ca.pem
-nodes:
-- role: control-plane
-  extraMounts:
-  - hostPath: $PWD/.ssl/root-ca.pem
-    containerPath: /etc/ca-certificates/keycloak/root-ca.pem
-    readOnly: true
-- role: worker
-EOF
+kind create cluster --image kindest/node:v1.33.1 --config boostrap/kind-config.yaml
 ```
 
 **What this does:**
@@ -104,7 +84,7 @@ From there you can install and setup the MetalLB config:
 # Install MetalLB
 kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.15.3/config/manifests/metallb-native.yaml
 # Configure MetalLB IP Pool and L2Advertisement
-kubectl apply -f demo-cnd-france-2026/metallb/config.yaml
+kubectl apply -f metallb-config.yaml
 ```
 
 ## Step 3: Install Ingress Controller
@@ -126,10 +106,6 @@ helm upgrade --install --wait --timeout 15m \
   --values - <<EOF
 defaultBackend:
   enabled: true
-controller:
-  admissionWebhooks:
-    certManager:
-      enabled: true
 EOF
 ```
 
@@ -141,12 +117,8 @@ Add the following entry to your `/etc/hosts` file to resolve the Keycloak hostna
 
 ```sh
 NGINX_LB_IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-echo "address=/keycloak.kind.cluster/${NGINX_LB_IP}" | sudo tee /etc/dnsmasq.d/keycloak.kind.cluster.conf
-sudo systemctl restart dnsmasq
-
-# On macOS, we need to add a resolver file for the custom domai
-sudo mkdir -p /etc/resolver
-echo "nameserver 127.0.0.1" | sudo tee /etc/resolver/keycloak.kind.cluster
+sudo sed -i '/keycloak\.kind\.cluster/d' /etc/hosts && \
+echo "$NGINX_LB_IP keycloak.kind.cluster" | sudo tee -a /etc/hosts
 ```
 
 ## Step 5: Install and Configure Keycloak
@@ -206,7 +178,7 @@ openssl x509 -req -in .ssl/csr.pem \
   -extensions v3_req -extfile .ssl/req.cnf
   
 # create secret used by keycloak ingress
-ctls -n keycloak keycloak.kind.cluster-tls \
+kubectl create secret tls -n keycloak keycloak.kind.cluster-tls \
   --cert=.ssl/cert.pem \
   --key=.ssl/key.pem
 ```
@@ -249,70 +221,7 @@ kubectl create namespace dev-team
 
 ```sh
 # DevTeam Role
-kubectl apply -f - <<EOF
-apiVersion: rbac.authorization.k8s.io/v1
-kind: Role
-metadata:
-  name: dev-namespace-developer
-  namespace: dev-team
-rules:
-  - apiGroups: [""]
-    resources: ["pods","services","configmaps"]
-    verbs: ["get","list","watch","create","update","patch","delete"]
-  - apiGroups: [""]
-    resources: ["pods/log"]
-    verbs: ["get"]
-  - apiGroups: ["apps"]
-    resources: ["deployments","replicasets","statefulsets"]
-    verbs: ["get","list","watch","create","update","patch","delete"]
-  - apiGroups: ["apps"]
-    resources: ["deployments/scale","statefulsets/scale"]
-    verbs: ["get","update","patch"]
-  - apiGroups: ["networking.k8s.io"]
-    resources: ["ingresses","networkpolicies"]
-    verbs: ["get","list","watch","create","update","patch","delete"]
-  - apiGroups: [""]
-    resources: ["events"]
-    verbs: ["get","list","watch"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: dev-namespace-developer-binding
-  namespace: dev-team
-subjects:
-  - kind: Group
-    name: kube-dev
-    apiGroup: rbac.authorization.k8s.io
-roleRef:
-  kind: Role
-  name: dev-namespace-developer
-  apiGroup: rbac.authorization.k8s.io
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: dev-discovery
-rules:
-  - nonResourceURLs: ["/api","/apis","/openapi","/version"]
-    verbs: ["get"]
-  - apiGroups: [""]
-    resources: ["namespaces"]
-    verbs: ["get","list","watch"]  # read-only; helps clients pick namespaces
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: dev-discovery-binding
-subjects:
-  - kind: Group
-    name: kube-dev
-    apiGroup: rbac.authorization.k8s.io
-roleRef:
-  kind: ClusterRole
-  name: dev-discovery
-  apiGroup: rbac.authorization.k8s.io
-EOF
+kubectl apply -f bootstrap/roles/dev-team.yaml
 ```
 
 This creates a namespace-scoped role for developers that allows them to:
@@ -328,20 +237,7 @@ The role is bound to the `kube-dev` group from Keycloak, and developers also get
 Now let's set up permissions for platform administrators who need broader cluster access.
 
 ```sh
-kubectl apply -f - <<EOF
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: platform-admin-binding
-subjects:
-  - kind: Group
-    name: kube-admin
-    apiGroup: rbac.authorization.k8s.io
-roleRef:
-  kind: ClusterRole
-  name: admin        # built-in role
-  apiGroup: rbac.authorization.k8s.io
-EOF
+kubectl apply -f bootstrap/roles/admin-team.yaml  
 ```
 
 This gives members of the `kube-admin` group the built-in `admin` role across the cluster.
