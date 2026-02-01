@@ -89,11 +89,36 @@ EOF
 - Mounts the root CA certificate so the API server can verify Keycloak's SSL certificate
 - Extracts user identity from the `email` claim and group membership from the `groups` claim in JWT tokens
 
+We also need to install MetalLB to provide a way for the ingress controller to expose services outside the cluster.
+
+First get the available addresses from the docker IPAM:
+
+```sh
+docker network inspect -f '{{.IPAM.Config}}' kind
+# ex: [{172.18.0.0/16  172.18.0.1 map[]} {fc00:f853:ccd:e793::/64  fc00:f853:ccd:e793::1 map[]}]
+```
+
+From there you can install and setup the MetalLB config:
+
+```sh
+# Install MetalLB
+kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.15.3/config/manifests/metallb-native.yaml
+# Configure MetalLB IP Pool and L2Advertisement
+kubectl apply -f demo-cnd-france-2026/metallb/config.yaml
+```
+
 ## Step 3: Install Ingress Controller
 
 To expose services like Keycloak outside the cluster, we need an ingress controller. We'll use the NGINX Ingress Controller.
 
 ```sh
+helm install \
+  cert-manager oci://quay.io/jetstack/charts/cert-manager \
+  --version v1.19.2 \
+  --namespace cert-manager \
+  --create-namespace \
+  --set crds.enabled=true
+
 helm upgrade --install --wait --timeout 15m \
   --namespace ingress-nginx --create-namespace \
   --repo https://kubernetes.github.io/ingress-nginx \
@@ -101,6 +126,10 @@ helm upgrade --install --wait --timeout 15m \
   --values - <<EOF
 defaultBackend:
   enabled: true
+controller:
+  admissionWebhooks:
+    certManager:
+      enabled: true
 EOF
 ```
 
@@ -126,30 +155,7 @@ echo "nameserver 127.0.0.1" | sudo tee /etc/resolver/keycloak.kind.cluster
 helm upgrade --install --wait --timeout 15m \
   --namespace keycloak --create-namespace \
   --repo https://charts.bitnami.com/bitnami keycloak keycloak \
-  --reuse-values --values - <<EOF
-keycloak:
-  image: bitnamilegacy/keycloak:latest
-auth:
-  createAdminUser: true
-  adminUser: admin
-  adminPassword: admin
-  managementUser: manager
-  managementPassword: manager
-proxyAddressForwarding: true
-ingress:
-  enabled: true
-  ingressClass: nginx
-  hostname: keycloak.kind.cluster
-  tls: true
-  extraTls:
-  - hosts:
-    - keycloak.kind.cluster
-    secretName: keycloak.kind.cluster-tls
-postgresql:
-  image: bitnamilegacy/postgresql:latest
-  enabled: true
-  postgresqlPassword: password
-EOF
+  -f keycloak-values.yaml
 ```
 
 Keycloak is now installed with:
@@ -200,7 +206,7 @@ openssl x509 -req -in .ssl/csr.pem \
   -extensions v3_req -extfile .ssl/req.cnf
   
 # create secret used by keycloak ingress
-kubectl create secret tls -n keycloak keycloak.kind.cluster-tls \
+ctls -n keycloak keycloak.kind.cluster-tls \
   --cert=.ssl/cert.pem \
   --key=.ssl/key.pem
 ```
