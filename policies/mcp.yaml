@@ -1,0 +1,29 @@
+  apiVersion: policies.kyverno.io/v1alpha1
+  kind: ValidatingPolicy
+  metadata:
+    name: restrict-get-resource
+  spec:
+    evaluation:
+      mode: Envoy
+    variables:
+      - name: mcpReq
+        expression: mcp.Parse(object.attributes.request.http.body
+      - name: namespaceArg
+        expression: variables.mcpReq.GetStringArgument("namespace", "")
+      - name: isAllowedNamespace
+        expression: variables.namespaceArg in ["default", "dev-team", "test"]
+      # Skip jwt part for clarity ...
+      - name: sar
+        expression: >-
+          resource.Post("authorization.k8s.io/v1", "subjectaccessreviews", variables.res)
+    matchConditions:
+    - expression: |
+        variables.mcpReq.Method == mcp.ToolsCallMethod
+          && variables.mcpReq.ToolCall.Name  == "k8s_get_resources"
+          && variables.isAllowedNamespace
+      name: isToolsCall
+    validations:
+    - expression: |
+        variables.mcpReq.GetBoolArgument("all_namespaces", false) == false
+          && has(variables.sar.status)
+          && variables.sar.status.allowed == true ? envoy.Allowed().Response() : envoy.Denied(403).Response()
