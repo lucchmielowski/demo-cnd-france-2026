@@ -1,0 +1,52 @@
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: restrict-create-from-url
+spec:
+  evaluation:
+    mode: Envoy
+  variables:
+    - name: mcpReq
+      expression: mcp.Parse(object.attributes.request.http.body)
+    - name: namespace
+      expression: variables.mcpReq.GetStringArgument("namespace", "")
+    - name: url
+      expression: variables.mcpReq.GetStringArgument("url", "")
+    - name: manifest
+      expression: yaml.UnmarshalFromURL(variables.url)
+    - name: resourceKind
+      expression: variables.manifest["kind"].lowerAscii() + 's'
+    - name: jwks
+      expression: jwks.Fetch("http://keycloak.keycloak.svc.cluster.local/realms/master/protocol/openid-connect/certs")
+    - name: jwtString
+      expression: object.attributes.request.http.headers["authorization"].split(" ")[1]
+    - name: decodedJwt
+      expression: jwt.Decode(variables.jwtString, variables.jwks)
+    - name: res
+      expression: >-
+        {
+          "kind": dyn("SubjectAccessReview"),
+          "apiVersion": dyn("authorization.k8s.io/v1"),
+          "spec": dyn({
+            "resourceAttributes": dyn({
+              "group": "",
+              "resource": variables.resourceKind,
+              "namespace": variables.namespace,
+              "verb": "create"
+            }),
+            "user": dyn(variables.decodedJwt.Claims["email"]),
+            "groups": dyn(variables.decodedJwt.Claims["groups"])
+          })
+        }
+    - name: sar
+      expression: >-
+        resource.Post("authorization.k8s.io/v1", "subjectaccessreviews", variables.res)
+  matchConditions:
+    - expression: |
+        mcp.Parse(object.attributes.request.http.body).Method == mcp.ToolsCallMethod
+          && mcp.Parse(object.attributes.request.http.body).ToolCall.Name == "k8s_create_resource_from_url"
+      name: isToolsCall
+  validations:
+    - expression: |
+        has(variables.jwtString) && has(variables.sar.status) && variables.sar.status.allowed == true ?
+          envoy.Allowed().Response() : envoy.Denied(403).Response()
