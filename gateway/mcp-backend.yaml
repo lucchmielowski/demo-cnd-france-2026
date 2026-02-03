@@ -1,16 +1,15 @@
-apiVersion: gateway.kgateway.dev/v1alpha1
-kind: Backend
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayBackend
 metadata:
   name: mcp
-  namespace: kgateway-system
+  namespace: agentgateway-system
   labels:
     app: agentgateway-kyverno
 spec:
-  type: MCP
   mcp:
     targets:
-    - name: kagent-tools
-      static:
-        host: "kagent-tools.kagent.svc.cluster.local"
-        port: 8084
-        protocol: StreamableHTTP
+      - name: kagent-tools
+        static:
+          host: "kagent-tools.kagent.svc.cluster.local"
+          port: 8084
+          protocol: StreamableHTTP

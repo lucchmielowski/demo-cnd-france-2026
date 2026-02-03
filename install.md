@@ -347,15 +347,11 @@ These policies include:
 kubectl apply --server-side -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.4.1/standard-install.yaml
 
 
-# Install Kgateway CRDS
-helm upgrade -i kgateway-crds oci://cr.kgateway.dev/kgateway-dev/charts/kgateway-crds --version v2.1.2 --namespace kgateway-system --create-namespace
+# Install Agentgateway CRDS
+helm upgrade -i agentgateway-crds oci://ghcr.io/kgateway-dev/charts/agentgateway-crds --create-namespace --namespace agentgateway-system --version v2.2.0-main --set controller.image.pullPolicy=Always
 
-# Install KGateway
-helm upgrade -i kgateway oci://cr.kgateway.dev/kgateway-dev/charts/kgateway \
-  --version v2.1.2 \
-  --namespace kgateway-system \
-  --create-namespace \
-  --set agentgateway.enabled=true
+# Install Agentgateway
+helm upgrade -i agentgateway oci://ghcr.io/kgateway-dev/charts/agentgateway   --namespace agentgateway-system   --version v2.2.0-main   --set controller.image.pullPolicy=Always   --set controller.extraEnv.KGW_ENABLE_GATEWAY_API_EXPERIMENTAL_FEATURES=true
 ```
 
 We also need install kubernetes-aware MCP tools:

@@ -31,4 +31,4 @@ spec:
         variables.decodedJwt.Valid &&
           (variables.userGroup == "kube-dev" && variables.allowedTools ||
           variables.userGroup == "kube-admin") ?
-            envoy.Allowed().Response() : envoy.Denied(403).Body("Can't access MCP tools").Response()
+            envoy.Allowed().Response() : envoy.Denied(403).Response()

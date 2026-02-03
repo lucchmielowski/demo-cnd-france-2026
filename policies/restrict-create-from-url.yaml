@@ -6,6 +6,8 @@ spec:
   evaluation:
     mode: Envoy
   variables:
+    - name: HTTPMethod
+      expression: object.attributes.request.http.method
     - name: mcpReq
       expression: mcp.Parse(object.attributes.request.http.body)
     - name: namespace
@@ -49,4 +51,4 @@ spec:
   validations:
     - expression: |
         has(variables.jwtString) && has(variables.sar.status) && variables.sar.status.allowed == true ?
-          envoy.Allowed().Response() : envoy.Denied(403).Response()
+          envoy.Allowed().Response() : envoy.Denied(406).Response()
