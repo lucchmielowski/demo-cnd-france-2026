@@ -1,29 +1,30 @@
 apiVersion: policies.kyverno.io/v1
 kind: ValidatingPolicy
 metadata:
-  name: restrict-create-from-url
+  name: create-from-url-authz
 spec:
   evaluation:
     mode: Envoy
   variables:
-    - name: HTTPMethod
-      expression: object.attributes.request.http.method
+    # Same as previous policy, parse MCP, get args, get JWT Token
     - name: mcpReq
       expression: mcp.Parse(object.attributes.request.http.body)
     - name: namespace
       expression: variables.mcpReq.GetStringArgument("namespace", "")
     - name: url
       expression: variables.mcpReq.GetStringArgument("url", "")
-    - name: manifest
-      expression: yaml.UnmarshalFromURL(variables.url)
-    - name: resourceKind
-      expression: variables.manifest["kind"].lowerAscii() + 's'
     - name: jwks
       expression: jwks.Fetch("http://keycloak.keycloak.svc.cluster.local/realms/master/protocol/openid-connect/certs")
     - name: jwtString
       expression: object.attributes.request.http.headers["authorization"].split(" ")[1]
     - name: decodedJwt
       expression: jwt.Decode(variables.jwtString, variables.jwks)
+    # Get and parse manifest from URL
+    - name: manifest
+      expression: yaml.UnmarshalFromURL(variables.url)
+    - name: resourceKind
+      expression: variables.manifest["kind"].lowerAscii() + 's'
+    # Create SAR to check if user is allowed to do X
     - name: res
       expression: >-
         {
@@ -50,5 +51,5 @@ spec:
       name: isToolsCall
   validations:
     - expression: |
-        has(variables.jwtString) && has(variables.sar.status) && variables.sar.status.allowed == true ?
-          envoy.Allowed().Response() : envoy.Denied(406).Response()
+        has(variables.sar.status) && variables.sar.status.allowed == true ?
+          envoy.Allowed().Response() : envoy.Denied(403).Response()

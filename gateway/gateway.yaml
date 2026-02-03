@@ -7,6 +7,11 @@ metadata:
     app: agentgateway-kyverno
 spec:
   gatewayClassName: agentgateway
+  infrastructure:
+    parametersRef:
+      name: agentgateway-config
+      group: agentgateway.dev
+      kind: AgentgatewayParameters
   listeners:
     - protocol: HTTP
       port: 8080

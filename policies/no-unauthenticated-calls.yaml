@@ -1,0 +1,26 @@
+# Forbid all unauthenticated calls on the gateway
+apiVersion: policies.kyverno.io/v1
+kind: ValidatingPolicy
+metadata:
+  name: no-unauthenticated-calls
+spec:
+  evaluation:
+    mode: Envoy
+  variables:
+    # Decode JWT token from user
+    - name: jwks
+      expression: jwks.Fetch("http://keycloak.keycloak.svc.cluster.local/realms/master/protocol/openid-connect/certs")
+    - name: jwtString
+      expression: object.attributes.request.http.headers["authorization"].split(" ")[1]
+    - name: decodedJwt
+      expression: jwt.Decode(variables.jwtString, variables.jwks)
+    # Get user group from JWT token
+    - name: userGroup
+      expression: variables.decodedJwt.Claims["groups"][0]
+  validations:
+    # If valid JWT token and known user group, allow access
+    - expression: |
+        has(variables.jwtString) &&
+        variables.decodedJwt.Valid &&
+          variables.userGroup in ["kube-dev", "kube-admin"] ?
+            envoy.Allowed().Response() : envoy.Denied(401).Response()
