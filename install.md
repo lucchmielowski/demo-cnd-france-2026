@@ -60,7 +60,7 @@ Now we'll create a Kind cluster configured to use Keycloak as an OIDC provider. 
 ```sh
 # create cluster with our generated certificate
 # and pass necessary arguments to api server
-kind create cluster --image kindest/node:v1.33.1 --config boostrap/kind-config.yaml
+kind create cluster --image kindest/node:v1.33.1 --config bootstrap/kind-config.yaml
 ```
 
 **What this does:**
@@ -84,7 +84,7 @@ From there you can install and setup the MetalLB config:
 # Install MetalLB
 kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.15.3/config/manifests/metallb-native.yaml
 # Configure MetalLB IP Pool and L2Advertisement
-kubectl apply -f metallb-config.yaml
+kubectl apply -f bootstrap/metallb-config.yaml
 ```
 
 ## Step 3: Install Ingress Controller
@@ -111,7 +111,7 @@ EOF
 
 This installs the NGINX Ingress Controller which will route external traffic to our Keycloak instance.
 
-## Step 4: Configure DNS Resolution
+## Step 4 (optional): Configure DNS Resolution
 
 Add the following entry to your `/etc/hosts` file to resolve the Keycloak hostname:
 
@@ -185,67 +185,38 @@ kubectl create secret tls -n keycloak keycloak.kind.cluster-tls \
 
 These certificates enable HTTPS for the Keycloak ingress and are trusted by our Kind cluster since they're signed by the root CA we mounted earlier.
 
-## Step 7: Configure Keycloak Users and Groups
+## Step 7: Configure K8s RBAC for Users and Groups
 
 Before setting up RBAC, you need to configure Keycloak with users and groups. Access the Keycloak admin console:
 
-1. Navigate to `https://keycloak.kind.cluster` in your browser
-2. Login with credentials: `admin/admin`
-3. In the "master" realm, create two groups:
-   - `kube-admin` - for platform administrators
-   - `kube-dev` - for developers
-4. Create two users:
-   - **user-admin**: Add to `kube-admin` group, set password to `user-admin`
-   - **user-dev**: Add to `kube-dev` group, set password to `user-dev`
-5. Create an OIDC client named `kube` with:
-   - Client ID: `kube`
-   - Client Secret: `kube-client-secret`
-   - Valid Redirect URIs: `*`
-   - Access Type: `confidential`
-6. Create another OIDC client named `mcp-inspector` for testing:
-   - Client ID: `mcp-inspector`
-   - Access Type: `public`
-   - Valid Redirect URIs: `*`
-   - Direct Access Grants Enabled: `ON`
-7. Configure the `kube` client to include the `groups` claim in tokens:
-   - Go to the client's "Mappers" tab
-   - Add a "Group Membership" mapper named `groups`
-   - Token Claim Name: `groups`
-8. Create a namespace in Kubernetes for our dev team:
+Create a namespace in Kubernetes for our dev team and admin team:
 
 ```sh
 kubectl create namespace dev-team
+kubectl create namespace admin-team
 ```
 
-## Step 8: Configure RBAC for Developers
 
 ```sh
 # DevTeam Role
 kubectl apply -f bootstrap/roles/dev-team.yaml
+# AdminTeam role (admin CRB)
+kubectl apply -f bootstrap/roles/admin-team.yaml
+
 ```
 
-This creates a namespace-scoped role for developers that allows them to:
+Dev-team role creates a namespace-scoped role for developers that allows them to:
 - Manage common resources (pods, services, configmaps, deployments)
 - View logs and events
 - Scale deployments and statefulsets
 - Manage ingresses and network policies
 
-The role is bound to the `kube-dev` group from Keycloak, and developers also get cluster-level discovery permissions to list namespaces and access API endpoints.
+Both roles re bound to the `kube-<admin|dev>` group from Keycloak, and developers also have cluster-level discovery permissions to list namespaces and access API endpoints.
 
-## Step 9: Configure RBAC for Platform Administrators
-
-Now let's set up permissions for platform administrators who need broader cluster access.
+## Step 8: Create Kubectl Configurations for Users
 
 ```sh
-kubectl apply -f bootstrap/roles/admin-team.yaml  
-```
-
-This gives members of the `kube-admin` group the built-in `admin` role across the cluster.
-
-## Step 10: Create Kubectl Configurations for Users
-
-```sh
-./create-config.sh
+./bootstrap/create-config.sh
 ```
 
 This script:
@@ -275,24 +246,12 @@ kubectl get pods -n kube-system
 kubectl config use-context user-admin
 ```
 
-## Step 11: Install cert-manager
 
-cert-manager is required by Kyverno for managing TLS certificates used in webhook configurations.
-
-```sh
-helm upgrade -i cert-manager \
-  --namespace cert-manager --create-namespace \
-  --wait \
-  --repo https://charts.jetstack.io cert-manager \
-  --set crds.enabled=true
-```
-
-## Step 12: Install Kyverno Authorization Server
+## Step 9: Install Kyverno Authorization Server
 
 Kyverno will act as an authorization server that validates MCP requests against Kubernetes RBAC policies and custom business rules.
 
 ```sh
-echo "🔐 Creating ClusterIssuer for certificate generation..."
 kubectl apply -f - <<EOF
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer
@@ -301,9 +260,14 @@ metadata:
 spec:
   selfSigned: {}
 EOF
-
+```
 
 ```sh
+# Apply CRDs 
+kubectl apply \
+  -f https://raw.githubusercontent.com/kyverno/kyverno/refs/heads/main/config/crds/policies.kyverno.io/policies.kyverno.io_validatingpolicies.yaml
+
+# Install authz server
 helm upgrade --install kyverno-authz-server                             \
   --namespace kyverno --create-namespace                                \
   --wait                                                                \
@@ -327,20 +291,7 @@ The Kyverno authorization server will:
 - Perform SubjectAccessReview checks against Kubernetes RBAC
 - Enforce custom validation policies (namespace restrictions, label policies, etc.)
 
-
-## Step 13: Deploy Kyverno Policies
-
-Apply the custom validation policies that will enforce our security rules:
-
-```sh
-kubectl apply -f policies/
-```
-
-These policies include:
-- **opt-in-namespaces.yaml**: Restricts MCP tool calls to specific whitelisted namespaces (default, dev-team, test)
-- **restrict-mcp-label-update.yaml**: Validates that users have RBAC permissions before allowing label updates via MCP tools
-
-## Step 14: Install KGateway and Gateway API
+## Step 10: Install KGateway and Gateway API
 
 ```sh
 # Install Gateway API
@@ -367,7 +318,7 @@ helm upgrade -i -n kagent --create-namespace kagent-tools oci://ghcr.io/kagent-d
 - **Agent Gateway**: Enables agent-based interactions with enhanced AI features
 - **kagent-tools**: Kubernetes-aware tools that can be called through the MCP protocol
 
-## Step 15: Configure Gateway Resources
+## Step 11: Configure Gateway Resources
 
 Now we'll apply the gateway configurations that set up routing and authorization policies:
 
@@ -388,40 +339,40 @@ This creates the complete routing pipeline:
 User Request → Gateway → Kyverno Authorization Check → MCP Backend → Kubernetes API
 ```
 
-## Step 16: Testing the Setup
+## Step 12: Testing the Setup
 
 ### Get a User Token
 
 First, obtain a token for testing the MCP endpoint:
 
 ```sh
-# Get token for dev user
-DEV_TOKEN=$(curl -k -X POST https://keycloak.kind.cluster/realms/master/protocol/openid-connect/token \
-  -H 'Content-Type: application/x-www-form-urlencoded' \
-  -d 'grant_type=password' \
-  -d 'client_id=mcp-inspector' \
-  -d "username=user-dev" \
-  -d "password=user-dev" \
-  -d 'scope=openid' | jq -r '.access_token')
+# Get token for dev user using the script (copied to clipboard)
+./get-token.sh user-dev
 
+# Retrieve token from clipboard into variable (macOS)
+DEV_TOKEN=$(pbpaste)
 echo "Dev Token: $DEV_TOKEN"
-```
-
-You can also get the full token response to examine it:
-
-```sh
-curl -k -X POST https://keycloak.kind.cluster/realms/master/protocol/openid-connect/token \
-  -H 'Content-Type: application/x-www-form-urlencoded' \
-  -d 'grant_type=password' \
-  -d 'client_id=mcp-inspector' \
-  -d "username=user-dev" \
-  -d "password=user-dev" \
-  -d 'scope=openid'
 ```
 
 ### Test MCP Tool Access
 
-Once you have the gateway deployed, you can test MCP tool calls. The exact endpoint will depend on your gateway configuration, but it typically looks like:
+Once you have the gateway deployed, you can test MCP tool calls using either curl or mcp-inspector.
+
+#### Using mcp-inspector
+
+Alternatively, you can use the mcp-inspector tool which provides a more user-friendly interface:
+
+```sh
+# Get token for dev user (copied to clipboard)
+./get-token.sh user-dev
+
+# Use mcp-inspector UI to connect to the gateway
+npx modelcontextprotocol/inspector
+```
+
+#### Using curl
+
+The exact endpoint will depend on your gateway configuration, but it typically looks like:
 
 ```sh
 # Get the gateway endpoint
@@ -463,66 +414,7 @@ curl -k http://$GATEWAY_URL/mcp \
   }'
 ```
 
-Note that this, since we're using the dev token, this **shouldn't work**. This is what we're going to enforce in the next part.
-
-### Policy Enforcement with restrict-mcp-label-update Policy
-
-Now let's apply the `restrict-mcp-label-update.yaml` policy to enforce RBAC checks on `k8s_get_resources` calls.
-
-```sh
-kubectl apply -f - <<EOF
-apiVersion: policies.kyverno.io/v1alpha1
-kind: ValidatingPolicy
-metadata:
-  name: restrict-get-resource
-spec:
-  evaluation:
-    mode: Envoy
-  variables:
-    - name: body
-      expression: json.Unmarshal(object.attributes.request.http.body)
-    - name: isAllowedNamespace
-      expression: has(variables.body.params.arguments) && string(variables.body.params.arguments.namespace) in ["default", "dev-team", "test"]
-    - name: jwks
-      expression: jwks.Fetch("http://keycloak.keycloak.svc.cluster.local/realms/master/protocol/openid-connect/certs")
-    - name: jwtString
-      expression: object.attributes.request.http.headers["authorization"].split(" ")[1]
-    - name: decodedJwt
-      expression: jwt.Decode(variables.jwtString, variables.jwks)
-    - name: res
-      expression: >-
-        {
-          "kind": dyn("SubjectAccessReview"),
-          "apiVersion": dyn("authorization.k8s.io/v1"),
-          "spec": dyn({
-            "resourceAttributes": dyn({
-              "group": "",
-              "resource": string(variables.body.params.arguments.resource_type),
-              "namespace": string(variables.body.params.arguments.namespace),
-              "verb": "list"
-            }),
-            "user": dyn(variables.decodedJwt.Claims["email"]),
-            "groups": dyn(variables.decodedJwt.Claims["groups"])
-          })
-        }
-    - name: sar
-      expression: >-
-        resource.Post("authorization.k8s.io/v1", "subjectaccessreviews", variables.res)
-  matchConditions:
-  - expression: |
-      has(json.Unmarshal(object.attributes.request.http.body).method)
-        && json.Unmarshal(object.attributes.request.http.body).method == "tools/call"
-        && has(json.Unmarshal(object.attributes.request.http.body).params.name)
-        && json.Unmarshal(object.attributes.request.http.body).params.name == "k8s_get_resources"
-    name: isToolsCall
-  validations:
-  - expression: |
-      has(variables.body.params.arguments.all_namespaces)
-        && variables.body.params.arguments.all_namespaces == "false"
-        && has(variables.sar.status)
-        && variables.sar.status.allowed == true ? envoy.Allowed().Response() : envoy.Denied(403).Response()
-EOF
-```
+Note that since we're using the dev token, accessing `kube-system` namespace **shouldn't work**. This is what we're going to enforce in the next part.
 
 ### Common Issues
 
@@ -563,39 +455,3 @@ sudo rm -f /etc/resolver/keycloak.kind.cluster
 # Optional: Clean up SSL certificates
 rm -rf .ssl/
 ```
-
-## What You've Accomplished
-
-Congratulations! You've successfully built a comprehensive MCP gateway with least privilege controls:
-
-✅ **Authentication**: Users authenticate via Keycloak OIDC  
-✅ **Authorization**: Kyverno validates every MCP request against RBAC  
-✅ **Audit Trail**: All actions are logged with real user identity  
-✅ **Namespace Isolation**: Policies restrict access to approved namespaces  
-✅ **Business Rules**: Custom validation policies enforce organizational standards  
-✅ **Least Privilege**: Users can only perform actions their RBAC roles allow  
-
-This architecture solves the key challenges of AI/LLM integration with Kubernetes:
-- No more shared service accounts with excessive permissions
-- Complete audit trail of who did what
-- Fine-grained control over AI-initiated actions
-- Enforcement of business policies beyond RBAC
-
-## Next Steps
-
-Consider these enhancements:
-
-1. **Add more granular policies**: Create policies for resource quotas, image restrictions, pod security standards
-2. **Implement rate limiting**: Prevent abuse by limiting request rates per user
-3. **Add metrics and monitoring**: Export authorization metrics to Prometheus
-4. **Create custom MCP tools**: Build domain-specific tools that wrap complex Kubernetes operations
-5. **Integrate with CI/CD**: Use this pattern for secure automated deployments
-6. **Extend to multiple clusters**: Use the same pattern across dev, staging, and production environments
-
-## References
-
-- [MCP Authorization Blog Post](https://www.solo.io/blog/mcp-authorization-is-a-non-starter-for-enterprise)
-- [Kubernetes OIDC Authentication](https://kubernetes.io/docs/reference/access-authn-authz/authentication/#openid-connect-tokens)
-- [Kyverno Policies](https://kyverno.io/docs/)
-- [Gateway API](https://gateway-api.sigs.k8s.io/)
-- [Model Context Protocol (MCP)](https://modelcontextprotocol.io/)

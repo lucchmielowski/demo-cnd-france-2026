@@ -1,61 +1,225 @@
-# MCP Least Privileges Demo
+# Demo CND France 2026
 
-## Why we’re doing this demo — the problems we want to solve
+This demo showcases how Kyverno policies enforce authentication and authorization for MCP Gateway tool calls.
 
+## Prerequisites
 
-### The Gateway Model
-[https://www.solo.io/blog/mcp-authorization-is-a-non-starter-for-enterprise](https://www.solo.io/blog/mcp-authorization-is-a-non-starter-for-enterprise)
+- Kind cluster running with Kyverno Envoy Plugin
+- Keycloak configured with users and groups
+- Agent Gateway and KGateway deployed
+- Policies applied: `no-unauthenticated-calls` and `create-from-url-authz`
 
-<p align="center"><img src="docs/images/gateway-model.png" alt="MCP Gateway Policy Model" width="400"></a></p>
+## Setup
 
-### Uncontrolled tool access
-  - Today, if an AI agent or user gets access through a service account, it can usually call any Kubernetes API the account is allowed.
-  - That means one misconfigured binding could give far more power than intended (e.g., deleting nodes instead of just deploying apps).
+1. Ensure all components are running:
+   ```bash
+   kubectl get pods -n kyverno
+   kubectl get pods -n keycloak
+   ```
 
-###  No per-user accountability
-  - When an agent runs with a shared service account, Kubernetes only sees “serviceaccount:agent” in audit logs.
-  - We can’t tell if it was Alice or Bob who triggered a risky action — the identity of the actual human is lost.
+2. Get authentication tokens for different users:
+   ```bash
+   # Get token for a user in kube-dev group
+   ./get-token.sh alice
+   
+   # Get token for a user in kube-admin group
+   ./get-token.sh admin
+   ```
 
-###  Namespace & tenant isolation
-  - Developers should only manage workloads in their namespace (e.g., dev-team).
-  - Without proper enforcement, an agent could accidentally create or modify resources in the wrong tenant’s space.
+---
 
-###  Business guardrails are missing
-  - RBAC alone can’t express rules like “you can scale deployments, but not to more than 5 replicas” or “only use approved images.”
-  - We need extra validation to enforce these kinds of policies.
+## Example 1: Restrict all non-authorized calls
 
-###  LLM/MCP integration adds new risks
-  - Large Language Models are very good at “inventing” actions.
-  - Without tight mapping between tools and real Kubernetes permissions, an LLM could attempt operations that bypass normal security controls.
+This example demonstrates the `no-unauthenticated-calls` policy that enforces authentication and group membership for all MCP Gateway requests.
 
+### Policy Overview
 
-## What we’re showing
+The `no-unauthenticated-calls` policy:
+- Validates JWT tokens from the Authorization header
+- Verifies token signature using Keycloak JWKS endpoint
+- Checks that the user belongs to allowed groups (`kube-dev` or `kube-admin`)
+- Returns 401 Unauthorized for invalid or missing tokens
 
-- How an MCP Gateway can sit between users/agents and Kubernetes.
-- How we can use Kyverno to make sure each tool call (like “create deployment”) is:
-  - Authenticated with the user’s real identity from Keycloak.
-  - Checked against Kubernetes RBAC for least privilege.
-  - Optionally validated with policy guardrails.
-- Result: the AI agent or UI can only do what the actual user is allowed to do, in the right namespace, with safe defaults.
+### Test Case 1.1: Unauthenticated Request (Should Fail)
 
-👉 This way, we’re solving: least privilege, per-user auditing, tenant isolation, and safe guardrails — while still letting developers interact with Kubernetes through more user-friendly interfaces.
+```bash
+# Make a request without authentication token
+curl -X POST https://gateway.kind.cluster/mcp \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "method": "tools/call",
+    "params": {
+      "name": "k8s_list_resources",
+      "arguments": {}
+    }
+  }'
+```
 
-## What we're implementing
+**Expected Result:** 
+- Status: `401 Unauthorized`
+- Policy denies the request because no JWT token is present
 
-<p align="center"><img src="docs/images/demo-schema.png" alt="demo schema" width="400"></a></p>
+### Test Case 1.2: Valid Token with Authorized Group (Should Succeed)
 
-### Tools used
-- Kind
-- kyverno-envoy-plugin
-- Agentgateway + Kgateway
-- Keycloak
-- Kubernetes RBACs
+```bash
+# Get token for alice (member of kube-dev group)
+TOKEN=$(./get-token.sh alice)
 
-## Full demo
+# Make authenticated request
+curl -X POST https://gateway.kind.cluster/mcp \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "method": "tools/call",
+    "params": {
+      "name": "k8s_list_resources",
+      "arguments": {
+        "namespace": "default"
+      }
+    }
+  }'
+```
 
-The full demo is accessible in the following [script](./demo.md)
+**Expected Result:**
+- Status: `200 OK`
+- Policy allows the request because:
+  - Valid JWT token is present
+  - Token is properly signed and validated
+  - User belongs to `kube-dev` group (allowed group)
 
+### \[OPTIONAL\] Test Case 1.3: Invalid Token (Should Fail)
 
-## Possible improvements / things left to do
+```bash
+# Make a request with an invalid token
+curl -X POST https://gateway.kind.cluster/mcp \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer invalid-token-here' \
+  -d '{
+    "method": "tools/call",
+    "params": {
+      "name": "k8s_list_resources",
+      "arguments": {}
+    }
+  }'
+```
 
-- Instead of denying, we could also enrich the resopnse with additional context
+**Expected Result:**
+- Status: `401 Unauthorized`
+- Policy denies the request because the JWT token is invalid or cannot be decoded
+
+### \[OPTIONAL\] Test Case 1.4: Valid Token with Unauthorized Group (Should Fail)
+
+```bash
+# Get token for a user not in kube-dev or kube-admin groups
+TOKEN=$(./get-token.sh unauthorized-user)
+
+# Make authenticated request
+curl -X POST https://gateway.kind.cluster/mcp \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "method": "tools/call",
+    "params": {
+      "name": "k8s_list_resources",
+      "arguments": {}
+    }
+  }'
+```
+
+**Expected Result:**
+- Status: `401 Unauthorized`
+- Policy denies the request because user group is not in the allowed list
+
+---
+
+## Example 2: Restrict create from URL via SAR
+
+This example demonstrates the `create-from-url-authz` policy that uses Kubernetes Subject Access Review (SAR) to verify if a user has permission to create resources from a URL.
+
+### Policy Overview
+
+The `create-from-url-authz` policy:
+- Intercepts MCP tool calls for `k8s_create_resource_from_url`
+- Extracts namespace and URL from the MCP request arguments
+- Fetches and parses the Kubernetes manifest from the URL
+- Extracts the resource kind from the manifest
+- Creates a Subject Access Review (SAR) to check if the user can create that resource type in the specified namespace
+- Returns 403 Forbidden if SAR denies the operation
+
+### Test Case 2.1: Authorized Create Operation (Should Succeed)
+
+```bash
+# Get token for alice (has create permissions in dev namespace)
+TOKEN=$(./get-token.sh alice)
+
+# Create a deployment manifest URL (example)
+MANIFEST_URL="https://raw.githubusercontent.com/example/deployment.yaml"
+
+# Make authenticated request to create resource from URL
+curl -X POST https://gateway.kind.cluster/mcp \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $TOKEN" \
+  -d "{
+    \"method\": \"tools/call\",
+    \"params\": {
+      \"name\": \"k8s_create_resource_from_url\",
+      \"arguments\": {
+        \"namespace\": \"dev-team\",
+        \"url\": \"$MANIFEST_URL\"
+      }
+    }
+  }"
+```
+
+**Expected Result:**
+- Status: `200 OK`
+- Policy allows the request because:
+  - User is authenticated (from Example 1)
+  - SAR check confirms user has `create` permission for the resource type in `dev-team` namespace
+  - Resource is created successfully
+
+### Test Case 2.2: Unauthorized Create Operation (Should Fail)
+
+```bash
+# Get token for alice (does NOT have create permissions in production namespace)
+TOKEN=$(./get-token.sh alice)
+
+# Attempt to create resource in production namespace
+MANIFEST_URL="https://raw.githubusercontent.com/example/deployment.yaml"
+
+curl -X POST https://gateway.kind.cluster/mcp \
+  -H 'Content-Type: application/json' \
+  -H "Authorization: Bearer $TOKEN" \
+  -d "{
+    \"method\": \"tools/call\",
+    \"params\": {
+      \"name\": \"k8s_create_resource_from_url\",
+      \"arguments\": {
+        \"namespace\": \"production\",
+        \"url\": \"$MANIFEST_URL\"
+      }
+    }
+  }"
+```
+
+**Expected Result:**
+- Status: `403 Forbidden`
+- Policy denies the request because:
+  - SAR check fails - user does not have `create` permission for resources in `production` namespace
+  - Resource creation is blocked
+
+---
+
+## Summary
+
+These examples demonstrate:
+
+1. **Authentication Enforcement**: All requests must include valid JWT tokens from Keycloak, and users must belong to authorized groups.
+
+2. **Authorization Enforcement**: Even with valid authentication, users can only perform operations they're authorized for, verified through Kubernetes Subject Access Review.
+
+3. **Least Privilege**: Users are restricted to their assigned namespaces and resource types based on Kubernetes RBAC.
+
+4. **Per-User Accountability**: Each request is tied to the actual user identity from the JWT token, enabling proper audit trails.
+
+5. **Policy-Based Guardrails**: Kyverno policies provide additional validation beyond basic RBAC, allowing for complex business rules.

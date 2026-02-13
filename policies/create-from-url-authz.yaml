@@ -13,6 +13,7 @@ spec:
       expression: variables.mcpReq.GetStringArgument("namespace", "")
     - name: url
       expression: variables.mcpReq.GetStringArgument("url", "")
+      
     - name: jwks
       expression: jwks.Fetch("http://keycloak.keycloak.svc.cluster.local/realms/master/protocol/openid-connect/certs")
     - name: jwtString
@@ -44,7 +45,7 @@ spec:
     - name: sar
       expression: >-
         resource.Post("authorization.k8s.io/v1", "subjectaccessreviews", variables.res)
-  matchConditions:
+  matchConditions: 
     - expression: |
         mcp.Parse(object.attributes.request.http.body).Method == mcp.ToolsCallMethod
           && mcp.Parse(object.attributes.request.http.body).ToolCall.Name == "k8s_create_resource_from_url"

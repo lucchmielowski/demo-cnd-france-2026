@@ -6,6 +6,7 @@ metadata:
 spec:
   evaluation:
     mode: Envoy
+
   variables:
     # Decode JWT token from user
     - name: jwks
