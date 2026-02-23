@@ -42,9 +42,13 @@ The `no-unauthenticated-calls` policy:
 
 ### Test Case 1.1: Unauthenticated Request (Should Fail)
 
+TODO: the current gateway is using an http listener- do we want to switch it to https?
+
 ```bash
+GATEWAY_URL="$(kubectl get gateway -n agentgateway-system -o jsonpath='{.items[0].status.addresses[0].value}'):8080"
+
 # Make a request without authentication token
-curl -X POST https://gateway.kind.cluster/mcp \
+curl -X POST http://$GATEWAY_URL/mcp \
   -H 'Content-Type: application/json' \
   -d '{
     "method": "tools/call",
@@ -61,12 +65,16 @@ curl -X POST https://gateway.kind.cluster/mcp \
 
 ### Test Case 1.2: Valid Token with Authorized Group (Should Succeed)
 
+TODO: Does the terraform script need to add alice/bob? 
+
 ```bash
+GATEWAY_URL="$(kubectl get gateway -n agentgateway-system -o jsonpath='{.items[0].status.addresses[0].value}'):8080"
+
 # Get token for alice (member of kube-dev group)
 TOKEN=$(./get-token.sh alice)
 
 # Make authenticated request
-curl -X POST https://gateway.kind.cluster/mcp \
+curl -X POST http://$GATEWAY_URL/mcp \
   -H 'Content-Type: application/json' \
   -H "Authorization: Bearer $TOKEN" \
   -d '{

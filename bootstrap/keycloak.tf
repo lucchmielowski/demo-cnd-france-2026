@@ -122,3 +122,13 @@ resource "keycloak_openid_client_default_scopes" "mcp_inspector" {
     keycloak_openid_client_scope.groups.name,
   ]
 }
+
+
+# --- Add preferred_username mapper ---
+resource "keycloak_openid_user_property_protocol_mapper" "mcp_preferred_username" {
+  name          = "preferred-username"
+  realm_id      = local.realm_id
+  client_id     = keycloak_openid_client.mcp_inspector.id
+  user_property = "username"
+  claim_name    = "preferred_username"
+}

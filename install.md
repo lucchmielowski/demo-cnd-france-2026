@@ -116,8 +116,17 @@ This installs the NGINX Ingress Controller which will route external traffic to 
 Add the following entry to your `/etc/hosts` file to resolve the Keycloak hostname:
 
 ```sh
-NGINX_LB_IP=$(kubectl get svc -n ingress-nginx ingress-nginx-controller -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
-sudo sed -i '/keycloak\.kind\.cluster/d' /etc/hosts && \
+NGINX_LB_IP=$(kubectl get svc ingress-nginx-controller -n ingress-nginx \
+  -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+
+if sed --version >/dev/null 2>&1; then
+  # GNU sed (Linux)
+  sudo sed -i '/keycloak\.kind\.cluster/d' /etc/hosts
+else
+  # BSD sed (macOS)
+  sudo sed -i '' '/keycloak\.kind\.cluster/d' /etc/hosts
+fi
+
 echo "$NGINX_LB_IP keycloak.kind.cluster" | sudo tee -a /etc/hosts
 ```
 
@@ -127,7 +136,7 @@ echo "$NGINX_LB_IP keycloak.kind.cluster" | sudo tee -a /etc/hosts
 helm upgrade --install --wait --timeout 15m \
   --namespace keycloak --create-namespace \
   --repo https://charts.bitnami.com/bitnami keycloak keycloak \
-  -f keycloak-values.yaml
+  -f bootstrap/keycloak-values.yaml
 ```
 
 Keycloak is now installed with:
@@ -376,7 +385,7 @@ The exact endpoint will depend on your gateway configuration, but it typically l
 
 ```sh
 # Get the gateway endpoint
-GATEWAY_URL="$(kubectl get gateway -n kgateway-system -o jsonpath='{.items[0].status.addresses[0].value}'):8080"
+GATEWAY_URL="$(kubectl get gateway -n agentgateway-system -o jsonpath='{.items[0].status.addresses[0].value}'):8080"
 
 # Get a session ID
 SESSION_ID=$(curl -sS --http1.1 -i http://$GATEWAY_URL/mcp \
@@ -428,10 +437,63 @@ Note that since we're using the dev token, accessing `kube-system` namespace **s
 - Check API server logs: `kubectl logs -n kube-system kube-apiserver-kind-control-plane`
 - Verify OIDC configuration: `kubectl cluster-info dump | grep oidc`
 
+TODO:
+```
+E0223 19:11:19.422029       1 oidc.go:394] oidc authenticator: initializing plugin: Get "https://keycloak.kind.cluster/realms/master/.well-known/openid-configuration": tls: failed to verify certificate: x509: certificate is valid for ingress.local, not keycloak.kind.cluster
+```
+
 **3. Policy denials**
 - Check policy is applied: `kubectl get validatingpolicy -A`
 - Review Kyverno logs for denial reasons
 - Verify JWT token contains expected claims (email, groups)
+
+
+Error with no-unauthenticated-calls.yaml? 
+```
+2026-02-23T19:17:58Z    ERROR    Validating policy compilation error
+github.com/kyverno/kyverno-authz/pkg/commands/serve/envoy/validation-webhook.Command.func1.1.1.1
+    github.com/kyverno/kyverno-authz/pkg/commands/serve/envoy/validation-webhook/command.go:70
+github.com/kyverno/kyverno-authz/pkg/webhook/validation.(*validator).validateVpol
+    github.com/kyverno/kyverno-authz/pkg/webhook/validation/validator.go:45
+github.com/kyverno/kyverno-authz/pkg/webhook/validation.(*validator).ValidateCreate
+    github.com/kyverno/kyverno-authz/pkg/webhook/validation/validator.go:27
+sigs.k8s.io/controller-runtime/pkg/webhook/admission.(*validatorForType).Handle
+    sigs.k8s.io/controller-runtime@v0.22.4/pkg/webhook/admission/validator_custom.go:94
+sigs.k8s.io/controller-runtime/pkg/webhook/admission.(*Webhook).Handle
+    sigs.k8s.io/controller-runtime@v0.22.4/pkg/webhook/admission/webhook.go:181
+sigs.k8s.io/controller-runtime/pkg/webhook/admission.(*Webhook).ServeHTTP
+    sigs.k8s.io/controller-runtime@v0.22.4/pkg/webhook/admission/http.go:119
+sigs.k8s.io/controller-runtime/pkg/webhook/internal/metrics.InstrumentedHook.InstrumentHandlerInFlight.func1
+    github.com/prometheus/client_golang@v1.23.2/prometheus/promhttp/instrument_server.go:60
+net/http.HandlerFunc.ServeHTTP
+    net/http/server.go:2322
+github.com/prometheus/client_golang/prometheus/promhttp.InstrumentHandlerCounter.func1
+    github.com/prometheus/client_golang@v1.23.2/prometheus/promhttp/instrument_server.go:147
+net/http.HandlerFunc.ServeHTTP
+    net/http/server.go:2322
+github.com/prometheus/client_golang/prometheus/promhttp.InstrumentHandlerDuration.func2
+    github.com/prometheus/client_golang@v1.23.2/prometheus/promhttp/instrument_server.go:109
+net/http.HandlerFunc.ServeHTTP
+    net/http/server.go:2322
+net/http.(*ServeMux).ServeHTTP
+    net/http/server.go:2861
+net/http.serverHandler.ServeHTTP
+    net/http/server.go:3340
+net/http.(*conn).serve
+    net/http/server.go:2109
+```
+
+
+Error applying policy:
+```
+❯ kubectl apply -f policies/create-from-url-authz.yaml 
+The ValidatingPolicy "create-from-url-authz" is invalid: spec.variables[6].expression: Invalid value: "yaml.UnmarshalFromURL(variables.url)": ERROR: <input>:1:1: undeclared reference to 'yaml' (in container '')
+ | yaml.UnmarshalFromURL(variables.url)
+ | ^
+ERROR: <input>:1:22: undeclared reference to 'UnmarshalFromURL' (in container '')
+ | yaml.UnmarshalFromURL(variables.url)
+ | .....................^
+```
 
 **4. RBAC permission errors**
 - Test permissions directly with kubectl: `kubectl auth can-i list pods -n dev-team --as=user-dev@domain.com`

@@ -9,7 +9,7 @@ spec:
   from:
     - group: gateway.kgateway.dev
       kind: GatewayExtension
-      namespace: kgateway-system
+      namespace: agentgateway-system
   to:
     - group: ""
       kind: Service
