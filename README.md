@@ -50,22 +50,26 @@ GATEWAY_URL="$(kubectl get gateway -n agentgateway-system -o jsonpath='{.items[0
 # Make a request without authentication token
 curl -X POST http://$GATEWAY_URL/mcp \
   -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
   -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
     "method": "tools/call",
     "params": {
-      "name": "k8s_list_resources",
-      "arguments": {}
+      "name": "k8s_get_resources",
+      "arguments": {
+        "namespace": "default",
+        "resource_type": "pods"
+      }
     }
   }'
 ```
 
-**Expected Result:** 
-- Status: `401 Unauthorized`
+**Expected Result:**
+- Status: `403 Forbidden`
 - Policy denies the request because no JWT token is present
 
 ### Test Case 1.2: Valid Token with Authorized Group (Should Succeed)
-
-TODO: Does the terraform script need to add alice/bob? 
 
 ```bash
 GATEWAY_URL="$(kubectl get gateway -n agentgateway-system -o jsonpath='{.items[0].status.addresses[0].value}'):8080"
@@ -73,16 +77,29 @@ GATEWAY_URL="$(kubectl get gateway -n agentgateway-system -o jsonpath='{.items[0
 # Get token for alice (member of kube-dev group)
 TOKEN=$(./get-token.sh alice)
 
+# Initialize MCP session
+SESSION_ID=$(curl -sS --http1.1 -i http://$GATEWAY_URL/mcp \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -H "Accept: application/json, text/event-stream" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"curl","version":"1.0"}}}' \
+  | grep -i "^Mcp-Session-Id:" | cut -d' ' -f2 | tr -d '\r')
+
 # Make authenticated request
 curl -X POST http://$GATEWAY_URL/mcp \
   -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
   -H "Authorization: Bearer $TOKEN" \
+  -H "Mcp-Session-Id: $SESSION_ID" \
   -d '{
+    "jsonrpc": "2.0",
+    "id": 2,
     "method": "tools/call",
     "params": {
-      "name": "k8s_list_resources",
+      "name": "k8s_get_resources",
       "arguments": {
-        "namespace": "default"
+        "namespace": "default",
+        "resource_type": "pods"
       }
     }
   }'
@@ -99,14 +116,20 @@ curl -X POST http://$GATEWAY_URL/mcp \
 
 ```bash
 # Make a request with an invalid token
-curl -X POST https://gateway.kind.cluster/mcp \
+curl -X POST http://$GATEWAY_URL/mcp \
   -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
   -H 'Authorization: Bearer invalid-token-here' \
   -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
     "method": "tools/call",
     "params": {
-      "name": "k8s_list_resources",
-      "arguments": {}
+      "name": "k8s_get_resources",
+      "arguments": {
+        "namespace": "default",
+        "resource_type": "pods"
+      }
     }
   }'
 ```
@@ -122,14 +145,20 @@ curl -X POST https://gateway.kind.cluster/mcp \
 TOKEN=$(./get-token.sh unauthorized-user)
 
 # Make authenticated request
-curl -X POST https://gateway.kind.cluster/mcp \
+curl -X POST http://$GATEWAY_URL/mcp \
   -H 'Content-Type: application/json' \
+  -H 'Accept: application/json, text/event-stream' \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
     "method": "tools/call",
     "params": {
-      "name": "k8s_list_resources",
-      "arguments": {}
+      "name": "k8s_get_resources",
+      "arguments": {
+        "namespace": "default",
+        "resource_type": "pods"
+      }
     }
   }'
 ```

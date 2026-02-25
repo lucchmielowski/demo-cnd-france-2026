@@ -21,6 +21,7 @@ locals {
   user_groups = {
     user-dev   = ["kube-dev"]
     user-admin = ["kube-admin"]
+    alice      = ["kube-dev"]
   }
 }
 # create groups

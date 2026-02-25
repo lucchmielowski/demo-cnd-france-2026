@@ -1,5 +1,5 @@
 # Forbid all unauthenticated calls on the gateway
-apiVersion: policies.kyverno.io/v1
+apiVersion: policies.kyverno.io/v1beta1
 kind: ValidatingPolicy
 metadata:
   name: no-unauthenticated-calls

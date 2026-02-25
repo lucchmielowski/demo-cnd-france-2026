@@ -282,6 +282,11 @@ helm upgrade --install kyverno-authz-server                             \
   --wait                                                                \
   --repo https://kyverno.github.io/kyverno-authz kyverno-authz-server   \
   --values - <<EOF
+image:
+  repository: ghcr.io/lucchmielowski/kyverno-authz
+  tag: latest
+  pullPolicy: Always
+
 config:
   type: envoy
 validatingWebhookConfiguration:
@@ -437,63 +442,10 @@ Note that since we're using the dev token, accessing `kube-system` namespace **s
 - Check API server logs: `kubectl logs -n kube-system kube-apiserver-kind-control-plane`
 - Verify OIDC configuration: `kubectl cluster-info dump | grep oidc`
 
-TODO:
-```
-E0223 19:11:19.422029       1 oidc.go:394] oidc authenticator: initializing plugin: Get "https://keycloak.kind.cluster/realms/master/.well-known/openid-configuration": tls: failed to verify certificate: x509: certificate is valid for ingress.local, not keycloak.kind.cluster
-```
-
 **3. Policy denials**
 - Check policy is applied: `kubectl get validatingpolicy -A`
 - Review Kyverno logs for denial reasons
 - Verify JWT token contains expected claims (email, groups)
-
-
-Error with no-unauthenticated-calls.yaml? 
-```
-2026-02-23T19:17:58Z    ERROR    Validating policy compilation error
-github.com/kyverno/kyverno-authz/pkg/commands/serve/envoy/validation-webhook.Command.func1.1.1.1
-    github.com/kyverno/kyverno-authz/pkg/commands/serve/envoy/validation-webhook/command.go:70
-github.com/kyverno/kyverno-authz/pkg/webhook/validation.(*validator).validateVpol
-    github.com/kyverno/kyverno-authz/pkg/webhook/validation/validator.go:45
-github.com/kyverno/kyverno-authz/pkg/webhook/validation.(*validator).ValidateCreate
-    github.com/kyverno/kyverno-authz/pkg/webhook/validation/validator.go:27
-sigs.k8s.io/controller-runtime/pkg/webhook/admission.(*validatorForType).Handle
-    sigs.k8s.io/controller-runtime@v0.22.4/pkg/webhook/admission/validator_custom.go:94
-sigs.k8s.io/controller-runtime/pkg/webhook/admission.(*Webhook).Handle
-    sigs.k8s.io/controller-runtime@v0.22.4/pkg/webhook/admission/webhook.go:181
-sigs.k8s.io/controller-runtime/pkg/webhook/admission.(*Webhook).ServeHTTP
-    sigs.k8s.io/controller-runtime@v0.22.4/pkg/webhook/admission/http.go:119
-sigs.k8s.io/controller-runtime/pkg/webhook/internal/metrics.InstrumentedHook.InstrumentHandlerInFlight.func1
-    github.com/prometheus/client_golang@v1.23.2/prometheus/promhttp/instrument_server.go:60
-net/http.HandlerFunc.ServeHTTP
-    net/http/server.go:2322
-github.com/prometheus/client_golang/prometheus/promhttp.InstrumentHandlerCounter.func1
-    github.com/prometheus/client_golang@v1.23.2/prometheus/promhttp/instrument_server.go:147
-net/http.HandlerFunc.ServeHTTP
-    net/http/server.go:2322
-github.com/prometheus/client_golang/prometheus/promhttp.InstrumentHandlerDuration.func2
-    github.com/prometheus/client_golang@v1.23.2/prometheus/promhttp/instrument_server.go:109
-net/http.HandlerFunc.ServeHTTP
-    net/http/server.go:2322
-net/http.(*ServeMux).ServeHTTP
-    net/http/server.go:2861
-net/http.serverHandler.ServeHTTP
-    net/http/server.go:3340
-net/http.(*conn).serve
-    net/http/server.go:2109
-```
-
-
-Error applying policy:
-```
-❯ kubectl apply -f policies/create-from-url-authz.yaml 
-The ValidatingPolicy "create-from-url-authz" is invalid: spec.variables[6].expression: Invalid value: "yaml.UnmarshalFromURL(variables.url)": ERROR: <input>:1:1: undeclared reference to 'yaml' (in container '')
- | yaml.UnmarshalFromURL(variables.url)
- | ^
-ERROR: <input>:1:22: undeclared reference to 'UnmarshalFromURL' (in container '')
- | yaml.UnmarshalFromURL(variables.url)
- | .....................^
-```
 
 **4. RBAC permission errors**
 - Test permissions directly with kubectl: `kubectl auth can-i list pods -n dev-team --as=user-dev@domain.com`
